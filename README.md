@@ -145,36 +145,40 @@ parsing, and connection pooling.
 |---|---|
 | Hardware | Apple M5, 24 GB RAM |
 | Postgres | 17.9, Docker container |
-| PgMux | Docker container (same host) |
+| PgMux | Docker container (same network) |
+| Benchmark client | Python, same Docker network |
 | Tenants | 5 (separate database + user each) |
 | Connections/tenant | 4 (20 total) |
 | Duration | 180 seconds |
 | Workload | 80% reads / 20% writes |
 | Query mix | COUNT, aggregations, range scans, INSERT, UPDATE |
 
+Benchmark client runs inside the Docker network so that direct-to-Postgres
+and through-PgMux connections traverse the same number of network hops.
+
 ### Results
 
 | Metric | Direct Postgres | PgMux (fast path) | PgMux (throttled) | Fast path overhead |
 |---|---|---|---|---|
-| Throughput | 3,743 qps | 1,891 qps | 1,319 qps | -49.5% |
-| Latency avg | 1.33 ms | 2.64 ms | 3.78 ms | +1.31 ms |
-| Latency p50 | 0.97 ms | 1.99 ms | 2.23 ms | +1.02 ms |
-| Latency p95 | 3.65 ms | 6.58 ms | 11.49 ms | +2.93 ms |
-| Latency p99 | 5.62 ms | 9.24 ms | 19.03 ms | +3.62 ms |
+| Throughput | 1,063 qps | 949 qps | 662 qps | -10.7% |
+| Latency avg | 4.68 ms | 5.24 ms | 7.54 ms | +12.0% |
+| Latency p50 | 2.16 ms | 2.61 ms | 4.45 ms | +20.8% |
+| Latency p95 | 14.50 ms | 15.90 ms | 22.93 ms | +9.7% |
+| Latency p99 | 19.87 ms | 21.50 ms | 37.93 ms | +8.2% |
 | Errors | 0 | 0 | 0 | — |
 
 **Fast path** (normal operation): raw byte forwarding with no message
 parsing. A lightweight boundary scanner tracks transaction state for
-pool management. This is what >99% of traffic uses.
+pool management. Adds **~0.5 ms at p50** — this is what >99% of traffic uses.
 
 **Throttled** (tenant over size limit): full message parsing with
 read-only enforcement. PgMux automatically switches to this mode
 per-session when the database exceeds its configured size limit, and
 switches back when the tenant is under limit again.
 
-The fast path adds approximately **1 ms at p50** in this all-local
-Docker-to-Docker configuration. For production workloads where queries
-typically take 10-100+ ms, the overhead is negligible.
+Tail latencies (p95/p99) show single-digit percentage overhead in fast
+path mode. For production workloads where queries take 10-100+ ms, the
+overhead is negligible.
 
 ### Reproduce
 
@@ -182,7 +186,14 @@ typically take 10-100+ ms, the overhead is negligible.
 docker compose up -d
 pip install psycopg2-binary
 python3 bench/multi_tenant_bench.py --setup
+
+# From host (tests extra Docker hop):
 python3 bench/multi_tenant_bench.py --compare --duration 180
+
+# From inside Docker network (apples-to-apples):
+docker run --rm --network pg-multiplexer_default \
+  -v $(pwd)/bench:/bench python:3.12-slim sh -c \
+  "pip install -q psycopg2-binary && python3 /bench/multi_tenant_bench.py --host postgres --port 5432 --duration 180"
 ```
 
 ---

@@ -330,7 +330,6 @@ async fn fast_proxy_loop(
                 // Forward raw bytes to server
                 server.write_all(&bufs.client_buf).await?;
                 bufs.client_buf.clear();
-                server.flush().await?;
             }
 
             result = server.read_buf(&mut bufs.server_buf) => {
@@ -345,7 +344,6 @@ async fn fast_proxy_loop(
                 // Forward raw bytes to client
                 client.write_all(&bufs.server_buf).await?;
                 bufs.server_buf.clear();
-                client.flush().await?;
 
                 // Transition to slow path at idle boundary
                 if transition_pending && saw_idle {
