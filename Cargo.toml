@@ -33,20 +33,14 @@ serde_json = "1"
 toml = "1"
 
 # Metrics
-prometheus = "0.13"
 prometheus-client = "0.24"
 
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# Crypto for auth
-md5 = "0.7"
-sha2 = "0.10"
-hmac = "0.12"
-base64 = "0.22"
+# Random (used by frontend.rs)
 rand = "0.10"
-pbkdf2 = { version = "0.12", features = ["simple"] }
 
 # Misc
 dashmap = "6"

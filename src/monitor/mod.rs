@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
-use crate::admin::metrics::Metrics;
+use crate::admin::metrics::{DatabaseLabels, Metrics};
 use crate::config::Config;
 use crate::pool::PoolManager;
 
@@ -162,17 +162,23 @@ impl DbSizeMonitor {
                             self.db_sizes.insert(db.clone(), size);
 
                             // Update metrics
+                            let labels = DatabaseLabels {
+                                database: db.clone(),
+                            };
                             self.metrics
                                 .db_size_bytes
-                                .with_label_values(&[db])
+                                .get_or_create(&labels)
                                 .set(size as f64);
                             if let Some(limit) = self.get_db_limit(db) {
                                 self.metrics
                                     .db_size_limit_bytes
-                                    .with_label_values(&[db])
+                                    .get_or_create(&labels)
                                     .set(limit as f64);
                                 if size > limit {
-                                    self.metrics.db_over_limit.with_label_values(&[db]).set(1.0);
+                                    self.metrics
+                                        .db_over_limit
+                                        .get_or_create(&labels)
+                                        .set(1.0);
                                     warn!(
                                         db = db.as_str(),
                                         size = size,
@@ -180,7 +186,10 @@ impl DbSizeMonitor {
                                         "Database over size limit — enforcing read-only"
                                     );
                                 } else {
-                                    self.metrics.db_over_limit.with_label_values(&[db]).set(0.0);
+                                    self.metrics
+                                        .db_over_limit
+                                        .get_or_create(&labels)
+                                        .set(0.0);
                                 }
                             }
 

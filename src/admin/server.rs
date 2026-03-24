@@ -6,7 +6,6 @@ use axum::{
     routing::get,
     Router,
 };
-use prometheus::Encoder;
 use std::sync::Arc;
 use tracing::info;
 
@@ -59,14 +58,16 @@ async fn health_handler() -> impl IntoResponse {
 }
 
 async fn metrics_handler(State(state): State<AdminState>) -> impl IntoResponse {
-    let encoder = prometheus::TextEncoder::new();
-    let metric_families = state.metrics.registry.gather();
-    let mut buffer = Vec::new();
-    encoder.encode(&metric_families, &mut buffer).unwrap();
+    let mut buf = String::new();
+    prometheus_client::encoding::text::encode(&mut buf, &state.metrics.registry)
+        .expect("encoding metrics");
     (
         StatusCode::OK,
-        [("content-type", "text/plain; version=0.0.4")],
-        buffer,
+        [(
+            "content-type",
+            "application/openmetrics-text; version=1.0.0; charset=utf-8",
+        )],
+        buf,
     )
 }
 

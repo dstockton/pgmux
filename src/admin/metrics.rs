@@ -1,4 +1,14 @@
-use prometheus::{GaugeVec, IntCounter, IntGauge, Opts, Registry};
+use prometheus_client::encoding::EncodeLabelSet;
+use prometheus_client::metrics::counter::Counter;
+use prometheus_client::metrics::family::Family;
+use prometheus_client::metrics::gauge::Gauge;
+use prometheus_client::registry::Registry;
+use std::sync::atomic::AtomicU64;
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct DatabaseLabels {
+    pub database: String,
+}
 
 /// All application metrics.
 #[allow(dead_code)]
@@ -6,132 +16,110 @@ pub struct Metrics {
     pub registry: Registry,
 
     // Client metrics
-    pub client_connections_total: IntCounter,
-    pub client_connections_active: IntGauge,
+    pub client_connections_total: Counter<u64>,
+    pub client_connections_active: Gauge,
 
     // Server/pool metrics
-    pub server_connections_total: IntCounter,
-    pub server_connections_active: IntGauge,
-    pub server_connection_errors_total: IntCounter,
-    pub pool_hits_total: IntCounter,
-    pub pool_misses_total: IntCounter,
-    pub pool_timeouts_total: IntCounter,
+    pub server_connections_total: Counter<u64>,
+    pub server_connections_active: Gauge,
+    pub server_connection_errors_total: Counter<u64>,
+    pub pool_hits_total: Counter<u64>,
+    pub pool_misses_total: Counter<u64>,
+    pub pool_timeouts_total: Counter<u64>,
 
     // DB size metrics
-    pub db_size_bytes: GaugeVec,
-    pub db_size_limit_bytes: GaugeVec,
-    pub db_over_limit: GaugeVec,
+    pub db_size_bytes: Family<DatabaseLabels, Gauge<f64, AtomicU64>>,
+    pub db_size_limit_bytes: Family<DatabaseLabels, Gauge<f64, AtomicU64>>,
+    pub db_over_limit: Family<DatabaseLabels, Gauge<f64, AtomicU64>>,
 
     // Query metrics
-    pub queries_total: IntCounter,
-    pub queries_read_only_enforced: IntCounter,
+    pub queries_total: Counter<u64>,
+    pub queries_read_only_enforced: Counter<u64>,
 }
 
 impl Metrics {
     pub fn new() -> Self {
-        let registry = Registry::new();
+        let mut registry = Registry::default();
 
-        let client_connections_total = IntCounter::new(
+        let client_connections_total = Counter::<u64>::default();
+        let client_connections_active = Gauge::default();
+        let server_connections_total = Counter::<u64>::default();
+        let server_connections_active = Gauge::default();
+        let server_connection_errors_total = Counter::<u64>::default();
+        let pool_hits_total = Counter::<u64>::default();
+        let pool_misses_total = Counter::<u64>::default();
+        let pool_timeouts_total = Counter::<u64>::default();
+        let db_size_bytes = Family::<DatabaseLabels, Gauge<f64, AtomicU64>>::default();
+        let db_size_limit_bytes = Family::<DatabaseLabels, Gauge<f64, AtomicU64>>::default();
+        let db_over_limit = Family::<DatabaseLabels, Gauge<f64, AtomicU64>>::default();
+        let queries_total = Counter::<u64>::default();
+        let queries_read_only_enforced = Counter::<u64>::default();
+
+        registry.register(
             "pgmux_client_connections_total",
             "Total client connections accepted",
-        )
-        .unwrap();
-        let client_connections_active = IntGauge::new(
+            client_connections_total.clone(),
+        );
+        registry.register(
             "pgmux_client_connections_active",
             "Currently active client connections",
-        )
-        .unwrap();
-
-        let server_connections_total = IntCounter::new(
+            client_connections_active.clone(),
+        );
+        registry.register(
             "pgmux_server_connections_total",
             "Total server connections created",
-        )
-        .unwrap();
-        let server_connections_active = IntGauge::new(
+            server_connections_total.clone(),
+        );
+        registry.register(
             "pgmux_server_connections_active",
             "Currently active server connections",
-        )
-        .unwrap();
-        let server_connection_errors_total = IntCounter::new(
+            server_connections_active.clone(),
+        );
+        registry.register(
             "pgmux_server_connection_errors_total",
             "Total server connection errors",
-        )
-        .unwrap();
-
-        let pool_hits_total =
-            IntCounter::new("pgmux_pool_hits_total", "Connections served from pool").unwrap();
-        let pool_misses_total = IntCounter::new(
+            server_connection_errors_total.clone(),
+        );
+        registry.register(
+            "pgmux_pool_hits_total",
+            "Connections served from pool",
+            pool_hits_total.clone(),
+        );
+        registry.register(
             "pgmux_pool_misses_total",
             "Connections that required new backend connection",
-        )
-        .unwrap();
-        let pool_timeouts_total =
-            IntCounter::new("pgmux_pool_timeouts_total", "Connection acquire timeouts").unwrap();
-
-        let db_size_bytes = GaugeVec::new(
-            Opts::new("pgmux_db_size_bytes", "Current database size in bytes"),
-            &["database"],
-        )
-        .unwrap();
-        let db_size_limit_bytes = GaugeVec::new(
-            Opts::new(
-                "pgmux_db_size_limit_bytes",
-                "Configured database size limit in bytes",
-            ),
-            &["database"],
-        )
-        .unwrap();
-        let db_over_limit = GaugeVec::new(
-            Opts::new(
-                "pgmux_db_over_limit",
-                "Whether database is over its size limit (1=over, 0=ok)",
-            ),
-            &["database"],
-        )
-        .unwrap();
-
-        let queries_total =
-            IntCounter::new("pgmux_queries_total", "Total queries proxied").unwrap();
-        let queries_read_only_enforced = IntCounter::new(
+            pool_misses_total.clone(),
+        );
+        registry.register(
+            "pgmux_pool_timeouts_total",
+            "Connection acquire timeouts",
+            pool_timeouts_total.clone(),
+        );
+        registry.register(
+            "pgmux_db_size_bytes",
+            "Current database size in bytes",
+            db_size_bytes.clone(),
+        );
+        registry.register(
+            "pgmux_db_size_limit_bytes",
+            "Configured database size limit in bytes",
+            db_size_limit_bytes.clone(),
+        );
+        registry.register(
+            "pgmux_db_over_limit",
+            "Whether database is over its size limit (1=over, 0=ok)",
+            db_over_limit.clone(),
+        );
+        registry.register(
+            "pgmux_queries_total",
+            "Total queries proxied",
+            queries_total.clone(),
+        );
+        registry.register(
             "pgmux_queries_read_only_enforced",
             "Queries where read-only was enforced due to size limit",
-        )
-        .unwrap();
-
-        // Register all metrics
-        registry
-            .register(Box::new(client_connections_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(client_connections_active.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(server_connections_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(server_connections_active.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(server_connection_errors_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(pool_hits_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(pool_misses_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(pool_timeouts_total.clone()))
-            .unwrap();
-        registry.register(Box::new(db_size_bytes.clone())).unwrap();
-        registry
-            .register(Box::new(db_size_limit_bytes.clone()))
-            .unwrap();
-        registry.register(Box::new(db_over_limit.clone())).unwrap();
-        registry.register(Box::new(queries_total.clone())).unwrap();
-        registry
-            .register(Box::new(queries_read_only_enforced.clone()))
-            .unwrap();
+            queries_read_only_enforced.clone(),
+        );
 
         Self {
             registry,
