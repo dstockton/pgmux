@@ -26,10 +26,10 @@ fn pg_password() -> String {
 
 /// Helper: start the multiplexer in background, return its listen address.
 async fn start_multiplexer() -> (SocketAddr, SocketAddr, tokio::task::JoinHandle<()>) {
-    use pg_multiplexer::admin;
-    use pg_multiplexer::config::Config;
-    use pg_multiplexer::monitor::DbSizeMonitor;
-    use pg_multiplexer::pool::PoolManager;
+    use pgmux::admin;
+    use pgmux::config::Config;
+    use pgmux::monitor::DbSizeMonitor;
+    use pgmux::pool::PoolManager;
 
     let cfg = Arc::new(Config {
         listen_addr: "127.0.0.1:0".to_string(),
@@ -87,7 +87,7 @@ async fn start_multiplexer() -> (SocketAddr, SocketAddr, tokio::task::JoinHandle
                 tokio::spawn(async move {
                     m2.client_connections_total.inc();
                     m2.client_connections_active.inc();
-                    let _ = pg_multiplexer::protocol::handle_client(
+                    let _ = pgmux::protocol::handle_client(
                         stream, addr, pool_mgr, sz2, None, c2,
                     )
                     .await;

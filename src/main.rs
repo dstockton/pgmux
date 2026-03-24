@@ -13,8 +13,8 @@ use tracing::{error, info};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "pg-multiplexer",
-    about = "High-performance Postgres connection multiplexer"
+    name = "pgmux",
+    about = "Multi-tenant connection multiplexing for Postgres"
 )]
 struct Cli {
     /// Path to config file
@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "pg_multiplexer=info".into()),
+                .unwrap_or_else(|_| "pgmux=info".into()),
         )
         .init();
 
@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
     info!(
         listen = %cfg.listen_addr,
         admin = %cfg.admin_listen_addr,
-        "Starting pg-multiplexer"
+        "Starting pgmux"
     );
 
     let metrics = Arc::new(admin::metrics::Metrics::new());

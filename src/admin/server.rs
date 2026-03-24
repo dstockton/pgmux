@@ -111,7 +111,7 @@ fn generate_dashboard_html(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>pg-multiplexer Dashboard</title>
+<title>PgMux Dashboard</title>
 <style>
   :root {{
     --bg: #0f1117;
@@ -192,7 +192,7 @@ fn generate_dashboard_html(
 <body>
 <div class="container">
   <header>
-    <h1>pg-multiplexer</h1>
+    <h1>PgMux</h1>
     <div class="refresh-info">Auto-refresh: 5s | <span id="last-update"></span></div>
   </header>
 
