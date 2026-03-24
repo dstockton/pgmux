@@ -76,6 +76,34 @@ pub fn try_read_message(buf: &mut BytesMut, is_startup: bool) -> Result<Option<P
     }
 }
 
+/// Like try_read_message, but also returns the raw bytes of the message
+/// (type + length + payload) for zero-copy forwarding of unmodified messages.
+/// Only handles normal (non-startup) messages.
+pub fn try_read_message_with_raw(buf: &mut BytesMut) -> Result<Option<(PgMessage, BytesMut)>> {
+    if buf.len() < 5 {
+        return Ok(None);
+    }
+    let msg_type = buf[0];
+    let len = (&buf[1..5]).get_i32() as usize;
+    if !(4..=MAX_MESSAGE_SIZE).contains(&len) {
+        bail!(
+            "Invalid message length: {} for type '{}'",
+            len,
+            msg_type as char
+        );
+    }
+    let total_len = 1 + len;
+    if buf.len() < total_len {
+        return Ok(None);
+    }
+    // Split off the raw bytes first
+    let raw = buf.split_to(total_len);
+    // Parse the message from the raw bytes
+    let payload = BytesMut::from(&raw[5..]);
+    let msg = PgMessage { msg_type, payload };
+    Ok(Some((msg, raw)))
+}
+
 /// Parse startup message parameters into a HashMap.
 pub fn parse_startup_params(payload: &[u8]) -> Result<(i32, HashMap<String, String>)> {
     if payload.len() < 4 {
@@ -416,6 +444,21 @@ mod tests {
         assert_eq!(msg.msg_type, b'Q');
         let q = extract_query_text(&msg).unwrap();
         assert_eq!(q, "SELECT 1");
+    }
+
+    #[test]
+    fn test_try_read_message_with_raw() {
+        let mut buf = BytesMut::new();
+        buf.put_u8(b'Q');
+        let query = b"SELECT 1\0";
+        buf.put_i32((query.len() + 4) as i32);
+        buf.extend_from_slice(query);
+
+        let original_bytes = buf.to_vec();
+        let (msg, raw) = try_read_message_with_raw(&mut buf).unwrap().unwrap();
+        assert_eq!(msg.msg_type, b'Q');
+        assert_eq!(raw.as_ref(), &original_bytes[..]);
+        assert!(buf.is_empty());
     }
 
     #[test]
