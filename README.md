@@ -124,6 +124,54 @@ Key environment variable overrides:
 
 ---
 
+## Benchmarks
+
+Multi-tenant benchmark comparing direct Postgres connections vs routing
+through PgMux. Measures the overhead of protocol-level proxying, message
+parsing, and connection pooling.
+
+### Test Configuration
+
+| Parameter | Value |
+|---|---|
+| Hardware | Apple M5, 24 GB RAM |
+| Postgres | 17.9, Docker container |
+| PgMux | Docker container (same host) |
+| Tenants | 5 (separate database + user each) |
+| Connections/tenant | 4 (20 total) |
+| Duration | 180 seconds |
+| Workload | 80% reads / 20% writes |
+| Query mix | COUNT, aggregations, range scans, INSERT, UPDATE |
+
+### Results
+
+| Metric | Direct Postgres | Through PgMux | Overhead |
+|---|---|---|---|
+| Throughput | 3,266 qps | 1,319 qps | -59.6% |
+| Latency avg | 1.53 ms | 3.78 ms | +2.25 ms |
+| Latency p50 | 1.18 ms | 2.23 ms | +1.05 ms |
+| Latency p95 | 3.83 ms | 11.49 ms | +7.66 ms |
+| Latency p99 | 5.62 ms | 19.03 ms | +13.41 ms |
+| Errors | 0 | 0 | — |
+
+PgMux adds approximately **1-2 ms of latency at p50** for this
+all-local Docker-to-Docker configuration. The proxy parses every
+Postgres wire protocol message for query inspection, read-only
+enforcement, and connection pooling — this is inherent to the
+architecture. For production workloads where queries typically take
+10-100+ ms, this overhead becomes negligible.
+
+### Reproduce
+
+```sh
+docker compose up -d
+pip install psycopg2-binary
+python3 bench/multi_tenant_bench.py --setup
+python3 bench/multi_tenant_bench.py --compare --duration 180
+```
+
+---
+
 ## Status
 
 Early stage — feedback and contributions welcome.
