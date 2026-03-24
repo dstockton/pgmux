@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:17
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  pgmux:
+    build: .
+    ports:
+      - "15433:5433"
+      - "19090:9090"
+    environment:
+      PG_MUX_UPSTREAM_HOST: postgres
+      PG_MUX_UPSTREAM_PORT: "5432"
+      PG_MUX_UPSTREAM_TLS: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
