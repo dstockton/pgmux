@@ -314,147 +314,119 @@ async fn fast_proxy_loop(
     }
 }
 
-/// Main proxy loop: relay messages between client and server.
-async fn proxy_loop(
+/// Slow proxy loop: full message parsing with read-only enforcement.
+/// Used when a tenant's database exceeds its size limit.
+async fn slow_proxy_loop(
     client: &mut TcpStream,
     server: &mut TcpStream,
     pool_key: &PoolKey,
     size_monitor: &DbSizeMonitor,
     cfg: &Config,
     startup_info: &ClientStartupInfo,
-) -> Result<()> {
-    let mut client_buf = BytesMut::with_capacity(8192);
-    let mut server_buf = BytesMut::with_capacity(8192);
-    let mut _in_transaction = false;
+    over_limit: &Arc<AtomicBool>,
+    scanner: &mut MessageBoundaryScanner,
+    bufs: &mut ProxyBuffers,
+) -> Result<ProxyLoopExit> {
+    let mut forward_buf = BytesMut::with_capacity(8192);
     let mut transaction_read_only_injected = false;
 
     loop {
         tokio::select! {
-            // Read from client
-            result = client.read_buf(&mut client_buf) => {
+            result = client.read_buf(&mut bufs.client_buf) => {
                 let n = result?;
                 if n == 0 {
-                    return Ok(()); // Client disconnected
+                    return Ok(ProxyLoopExit::ClientDisconnected);
                 }
 
-                // Process client messages
-                while let Some(msg) = try_read_message(&mut client_buf, false)? {
-                    let should_inject_read_only = check_should_enforce_read_only(
-                        &msg, pool_key, size_monitor, cfg, startup_info,
-                    );
+                while let Some((msg, raw)) = try_read_message_with_raw(&mut bufs.client_buf)? {
+                    // Fast exit for non-query types — forward raw, skip enforcement
+                    if msg.msg_type != b'Q' && msg.msg_type != b'P' {
+                        server.write_all(&raw).await?;
+                        transaction_read_only_injected = false;
+                        continue;
+                    }
 
-                    if should_inject_read_only {
-                        // Check if this is a shrink operation that should be allowed
-                        let is_shrink = extract_query_text(&msg)
-                            .map(|q| is_shrink_operation(&q))
-                            .unwrap_or(false);
-
-                        if is_shrink && cfg.monitor.allow_shrink_operations_when_overlimit {
-                            // Allow shrink operations through
-                            let mut forward_buf = BytesMut::new();
-                            msg.encode(&mut forward_buf);
-                            server.write_all(&forward_buf).await?;
-                        } else if msg.msg_type == b'Q' {
-                            // Simple query — wrap in read-only transaction
-                            if let Some(query_text) = extract_query_text(&msg) {
-                                // Send a notice to the client
-                                if !transaction_read_only_injected {
-                                    let notice = build_notice_response(
-                                        "WARNING",
-                                        "53400",
-                                        &format!(
-                                            "Database '{}' has exceeded its size limit. Write operations are restricted. DELETE/TRUNCATE are still allowed.",
-                                            pool_key.database
-                                        ),
-                                    );
-                                    client.write_all(&notice).await?;
-                                    transaction_read_only_injected = true;
-                                }
-
-                                // Inject SET TRANSACTION READ ONLY before the query
-                                let wrapped = format!("SET TRANSACTION READ ONLY; {}", query_text);
-                                let mut payload = BytesMut::new();
-                                payload.extend_from_slice(wrapped.as_bytes());
-                                payload.put_u8(0);
-                                let wrapped_msg = PgMessage::new(b'Q', payload);
-                                let mut forward_buf = BytesMut::new();
-                                wrapped_msg.encode(&mut forward_buf);
-                                server.write_all(&forward_buf).await?;
-                            }
+                    // Check if we need to enforce read-only
+                    let max_size = startup_info.max_db_size
+                        .or(if cfg.monitor.default_max_db_size_bytes > 0 {
+                            Some(cfg.monitor.default_max_db_size_bytes)
                         } else {
-                            // Extended query protocol — forward as-is for now
-                            // TODO: intercept Parse messages to inject read-only
-                            let mut forward_buf = BytesMut::new();
-                            msg.encode(&mut forward_buf);
+                            None
+                        });
+
+                    let should_inject = if let Some(limit) = max_size {
+                        size_monitor.get_db_size(&pool_key.database)
+                            .map(|size| size > limit)
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    };
+
+                    if !should_inject {
+                        server.write_all(&raw).await?;
+                        transaction_read_only_injected = false;
+                        continue;
+                    }
+
+                    // --- Read-only enforcement ---
+                    let is_shrink = extract_query_text(&msg)
+                        .map(|q| is_shrink_operation(&q))
+                        .unwrap_or(false);
+
+                    if is_shrink && cfg.monitor.allow_shrink_operations_when_overlimit {
+                        server.write_all(&raw).await?;
+                    } else if msg.msg_type == b'Q' {
+                        if let Some(query_text) = extract_query_text(&msg) {
+                            if !transaction_read_only_injected {
+                                let notice = build_notice_response(
+                                    "WARNING",
+                                    "53400",
+                                    &format!(
+                                        "Database '{}' has exceeded its size limit. Write operations are restricted. DELETE/TRUNCATE are still allowed.",
+                                        pool_key.database
+                                    ),
+                                );
+                                client.write_all(&notice).await?;
+                                transaction_read_only_injected = true;
+                            }
+                            let wrapped = format!("SET TRANSACTION READ ONLY; {}", query_text);
+                            forward_buf.clear();
+                            let mut payload = BytesMut::new();
+                            payload.extend_from_slice(wrapped.as_bytes());
+                            payload.put_u8(0);
+                            let wrapped_msg = PgMessage::new(b'Q', payload);
+                            wrapped_msg.encode(&mut forward_buf);
                             server.write_all(&forward_buf).await?;
                         }
                     } else {
-                        // Forward message as-is
-                        let mut forward_buf = BytesMut::new();
-                        msg.encode(&mut forward_buf);
-                        server.write_all(&forward_buf).await?;
-                        transaction_read_only_injected = false;
+                        // Extended query protocol — forward as-is
+                        server.write_all(&raw).await?;
                     }
                 }
                 server.flush().await?;
             }
 
-            // Read from server
-            result = server.read_buf(&mut server_buf) => {
+            result = server.read_buf(&mut bufs.server_buf) => {
                 let n = result?;
                 if n == 0 {
-                    return Ok(()); // Server disconnected
+                    return Ok(ProxyLoopExit::ClientDisconnected);
                 }
 
-                // Process server messages for transaction state tracking
-                while let Some(msg) = try_read_message(&mut server_buf, false)? {
+                while let Some((_msg, raw)) = try_read_message_with_raw(&mut bufs.server_buf)? {
                     // Track transaction state from ReadyForQuery
-                    if msg.msg_type == b'Z' && !msg.payload.is_empty() {
-                        match msg.payload[0] {
-                            b'I' => _in_transaction = false,
-                            b'T' => _in_transaction = true,
-                            b'E' => _in_transaction = true, // error in transaction
-                            _ => {}
+                    if raw[0] == b'Z' && raw.len() == 6 {
+                        scanner.transaction_status = raw[5];
+                        // Check for slow→fast transition at idle boundary
+                        if raw[5] == b'I' && !over_limit.load(Ordering::Relaxed) {
+                            client.write_all(&raw).await?;
+                            client.flush().await?;
+                            return Ok(ProxyLoopExit::SwitchToFast);
                         }
                     }
-
-                    // Forward to client
-                    let mut forward_buf = BytesMut::new();
-                    msg.encode(&mut forward_buf);
-                    client.write_all(&forward_buf).await?;
+                    client.write_all(&raw).await?;
                 }
                 client.flush().await?;
             }
         }
     }
-}
-
-/// Check whether we should enforce read-only mode for this query.
-fn check_should_enforce_read_only(
-    msg: &PgMessage,
-    pool_key: &PoolKey,
-    size_monitor: &DbSizeMonitor,
-    cfg: &Config,
-    startup_info: &ClientStartupInfo,
-) -> bool {
-    // Only applies to query messages
-    if msg.msg_type != b'Q' && msg.msg_type != b'P' {
-        return false;
-    }
-
-    let max_size = startup_info
-        .max_db_size
-        .or(if cfg.monitor.default_max_db_size_bytes > 0 {
-            Some(cfg.monitor.default_max_db_size_bytes)
-        } else {
-            None
-        });
-
-    if let Some(limit) = max_size {
-        if let Some(current_size) = size_monitor.get_db_size(&pool_key.database) {
-            return current_size > limit;
-        }
-    }
-
-    false
 }
