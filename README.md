@@ -147,19 +147,22 @@ parsing, and connection pooling.
 
 | Metric | Direct Postgres | Through PgMux | Overhead |
 |---|---|---|---|
-| Throughput | 3,266 qps | 1,319 qps | -59.6% |
-| Latency avg | 1.53 ms | 3.78 ms | +2.25 ms |
-| Latency p50 | 1.18 ms | 2.23 ms | +1.05 ms |
-| Latency p95 | 3.83 ms | 11.49 ms | +7.66 ms |
-| Latency p99 | 5.62 ms | 19.03 ms | +13.41 ms |
+| Throughput | 3,743 qps | 1,891 qps | -49.5% |
+| Latency avg | 1.33 ms | 2.64 ms | +1.31 ms |
+| Latency p50 | 0.97 ms | 1.99 ms | +1.02 ms |
+| Latency p95 | 3.65 ms | 6.58 ms | +2.93 ms |
+| Latency p99 | 5.62 ms | 9.24 ms | +3.62 ms |
 | Errors | 0 | 0 | — |
 
-PgMux adds approximately **1-2 ms of latency at p50** for this
-all-local Docker-to-Docker configuration. The proxy parses every
-Postgres wire protocol message for query inspection, read-only
-enforcement, and connection pooling — this is inherent to the
-architecture. For production workloads where queries typically take
-10-100+ ms, this overhead becomes negligible.
+PgMux uses a **two-tier proxy architecture**. For tenants under their
+size limit (the common case), raw bytes are forwarded without message
+parsing — only a lightweight boundary scanner tracks transaction state.
+Full message parsing activates only when a tenant exceeds their database
+size limit and write restrictions are needed.
+
+This adds approximately **1 ms of latency at p50** in this all-local
+Docker-to-Docker configuration. For production workloads where queries
+typically take 10-100+ ms, the overhead is negligible.
 
 ### Reproduce
 
