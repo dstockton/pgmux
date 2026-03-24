@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use bytes::{Buf, BufMut, BytesMut};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -11,6 +12,29 @@ use super::{ClientStartupInfo, PoolKey};
 use crate::config::{self, Config};
 use crate::monitor::DbSizeMonitor;
 use crate::pool::PoolManager;
+
+/// Shared buffers passed between fast and slow proxy loops to prevent
+/// data loss when transitioning mid-stream.
+struct ProxyBuffers {
+    client_buf: BytesMut,
+    server_buf: BytesMut,
+}
+
+impl ProxyBuffers {
+    fn new() -> Self {
+        Self {
+            client_buf: BytesMut::with_capacity(8192),
+            server_buf: BytesMut::with_capacity(8192),
+        }
+    }
+}
+
+/// Result of a proxy loop — client disconnected or mode switch needed.
+enum ProxyLoopExit {
+    ClientDisconnected,
+    SwitchToSlow,
+    SwitchToFast,
+}
 
 /// Handle a new client connection.
 pub async fn handle_client(
@@ -234,6 +258,60 @@ pub async fn handle_client(
     pool_manager.release(pool_key, server_conn).await;
 
     Ok(())
+}
+
+/// Fast proxy loop: forward raw bytes without message parsing.
+/// Scans server→client stream for ReadyForQuery to track transaction state.
+/// Returns SwitchToSlow when the over_limit flag is set and we're at an idle boundary.
+async fn fast_proxy_loop(
+    client: &mut TcpStream,
+    server: &mut TcpStream,
+    over_limit: &Arc<AtomicBool>,
+    scanner: &mut MessageBoundaryScanner,
+    bufs: &mut ProxyBuffers,
+) -> Result<ProxyLoopExit> {
+    let mut transition_pending = false;
+
+    loop {
+        tokio::select! {
+            result = client.read_buf(&mut bufs.client_buf) => {
+                let n = result?;
+                if n == 0 {
+                    return Ok(ProxyLoopExit::ClientDisconnected);
+                }
+
+                // Check the over-limit flag
+                if !transition_pending && over_limit.load(Ordering::Relaxed) {
+                    transition_pending = true;
+                }
+
+                // Forward raw bytes to server
+                server.write_all(&bufs.client_buf).await?;
+                bufs.client_buf.clear();
+                server.flush().await?;
+            }
+
+            result = server.read_buf(&mut bufs.server_buf) => {
+                let n = result?;
+                if n == 0 {
+                    return Ok(ProxyLoopExit::ClientDisconnected);
+                }
+
+                // Scan for ReadyForQuery to track transaction state
+                let saw_idle = scanner.scan(&bufs.server_buf);
+
+                // Forward raw bytes to client
+                client.write_all(&bufs.server_buf).await?;
+                bufs.server_buf.clear();
+                client.flush().await?;
+
+                // Transition to slow path at idle boundary
+                if transition_pending && saw_idle {
+                    return Ok(ProxyLoopExit::SwitchToSlow);
+                }
+            }
+        }
+    }
 }
 
 /// Main proxy loop: relay messages between client and server.
