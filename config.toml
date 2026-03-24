@@ -1,4 +1,4 @@
-# pg-multiplexer configuration
+# pgmux configuration
 # All values shown are defaults.
 
 # Address to listen for Postgres client connections.
@@ -41,16 +41,16 @@ max_connection_lifetime_secs = 3600
 enabled = false
 
 # Path to TLS certificate (PEM format).
-# cert_path = "/etc/pg-multiplexer/server.crt"
+# cert_path = "/etc/pgmux/server.crt"
 
 # Path to TLS private key (PEM format).
-# key_path = "/etc/pg-multiplexer/server.key"
+# key_path = "/etc/pgmux/server.key"
 
 # Require TLS from clients (reject plaintext connections).
 require_tls = false
 
 # Use TLS when connecting to upstream Postgres.
-upstream_tls = false
+upstream_tls = true
 
 # Accept invalid/self-signed certs from upstream.
 upstream_tls_accept_invalid = false

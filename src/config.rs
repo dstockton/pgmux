@@ -53,7 +53,7 @@ pub struct PoolConfig {
     pub max_connection_lifetime_secs: u64,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct TlsConfig {
     /// Enable TLS on the client-facing side.
@@ -73,6 +73,19 @@ pub struct TlsConfig {
 
     /// Accept invalid certs from upstream (for self-signed).
     pub upstream_tls_accept_invalid: bool,
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cert_path: String::new(),
+            key_path: String::new(),
+            require_tls: false,
+            upstream_tls: true,
+            upstream_tls_accept_invalid: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -171,6 +184,9 @@ impl Config {
         if let Ok(v) = std::env::var("PG_MUX_TLS_KEY") {
             cfg.tls.key_path = v;
         }
+        if let Ok(v) = std::env::var("PG_MUX_UPSTREAM_TLS") {
+            cfg.tls.upstream_tls = v.parse().unwrap_or(v == "1" || v.eq_ignore_ascii_case("true"));
+        }
 
         Ok(cfg)
     }
@@ -222,5 +238,19 @@ mod tests {
         assert_eq!(cfg.listen_addr, "0.0.0.0:5433");
         assert_eq!(cfg.upstream_port, 5432);
         assert_eq!(cfg.pool.max_connections_per_pool, 20);
+    }
+
+    #[test]
+    fn test_upstream_tls_env_override() {
+        std::env::set_var("PG_MUX_UPSTREAM_TLS", "false");
+        let cfg = Config::load("nonexistent.toml", None, None).unwrap();
+        assert!(!cfg.tls.upstream_tls);
+        std::env::remove_var("PG_MUX_UPSTREAM_TLS");
+    }
+
+    #[test]
+    fn test_default_upstream_tls_is_true() {
+        let cfg = Config::default();
+        assert!(cfg.tls.upstream_tls);
     }
 }
