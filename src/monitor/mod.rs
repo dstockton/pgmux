@@ -6,7 +6,6 @@ use tracing::{debug, error, info, warn};
 
 use crate::admin::metrics::{DatabaseLabels, Metrics};
 use crate::config::Config;
-use crate::pool::PoolManager;
 
 static SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -19,7 +18,6 @@ struct SessionLimit {
 /// Monitors database sizes and tracks configured limits.
 pub struct DbSizeMonitor {
     cfg: Arc<Config>,
-    pool_manager: Arc<PoolManager>,
     metrics: Arc<Metrics>,
     /// Current known DB sizes (db_name -> size in bytes).
     db_sizes: DashMap<String, u64>,
@@ -30,10 +28,9 @@ pub struct DbSizeMonitor {
 }
 
 impl DbSizeMonitor {
-    pub fn new(cfg: Arc<Config>, pool_manager: Arc<PoolManager>, metrics: Arc<Metrics>) -> Self {
+    pub fn new(cfg: Arc<Config>, metrics: Arc<Metrics>) -> Self {
         Self {
             cfg,
-            pool_manager,
             metrics,
             db_sizes: DashMap::new(),
             db_limits: DashMap::new(),
@@ -298,10 +295,6 @@ mod tests {
 
         let monitor = DbSizeMonitor {
             cfg: Arc::new(crate::config::Config::default()),
-            pool_manager: Arc::new(crate::pool::PoolManager::new(
-                Arc::new(crate::config::Config::default()),
-                Arc::new(crate::admin::metrics::Metrics::new()),
-            )),
             metrics: Arc::new(crate::admin::metrics::Metrics::new()),
             db_sizes: DashMap::new(),
             db_limits: DashMap::new(),

@@ -231,31 +231,6 @@ impl PoolManager {
         self.total_server_connections.load(Ordering::Relaxed)
     }
 
-    async fn evict_expired_connections(&self) {
-        let idle_timeout = Duration::from_secs(self.cfg.pool.idle_timeout_secs);
-        let max_lifetime = Duration::from_secs(self.cfg.pool.max_connection_lifetime_secs);
-
-        for entry in self.pools.iter() {
-            let mut idle = entry.value().idle.lock();
-            let before = idle.len();
-            idle.retain(|conn| {
-                conn.last_used.elapsed() < idle_timeout && conn.created_at.elapsed() < max_lifetime
-            });
-            let evicted = before - idle.len();
-            if evicted > 0 {
-                self.total_server_connections
-                    .fetch_sub(evicted as u64, Ordering::Relaxed);
-                for _ in 0..evicted {
-                    self.metrics.server_connections_active.dec();
-                }
-                debug!(
-                    "Evicted {} idle connections from pool {}",
-                    evicted,
-                    entry.key()
-                );
-            }
-        }
-    }
 }
 
 /// Statistics for a single connection pool.

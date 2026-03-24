@@ -361,6 +361,7 @@ async fn fast_proxy_loop(
 
 /// Slow proxy loop: full message parsing with read-only enforcement.
 /// Used when a tenant's database exceeds its size limit.
+#[allow(clippy::too_many_arguments)]
 async fn slow_proxy_loop(
     client: &mut TcpStream,
     server: &mut TcpStream,

@@ -58,7 +58,6 @@ async fn main() -> Result<()> {
     let pool_manager = Arc::new(pool::PoolManager::new(cfg.clone(), metrics.clone()));
     let size_monitor = Arc::new(monitor::DbSizeMonitor::new(
         cfg.clone(),
-        pool_manager.clone(),
         metrics.clone(),
     ));
 

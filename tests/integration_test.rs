@@ -43,7 +43,6 @@ async fn start_multiplexer() -> (SocketAddr, SocketAddr, tokio::task::JoinHandle
     let pool_manager = Arc::new(PoolManager::new(cfg.clone(), metrics.clone()));
     let size_monitor = Arc::new(DbSizeMonitor::new(
         cfg.clone(),
-        pool_manager.clone(),
         metrics.clone(),
     ));
 

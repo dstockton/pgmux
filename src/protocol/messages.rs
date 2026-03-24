@@ -326,6 +326,12 @@ pub struct MessageBoundaryScanner {
     pub transaction_status: u8,
 }
 
+impl Default for MessageBoundaryScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MessageBoundaryScanner {
     pub fn new() -> Self {
         Self {
@@ -375,7 +381,7 @@ impl MessageBoundaryScanner {
                 self.header_buf[4],
             ]) as usize;
 
-            let payload_len = if len >= 4 { len - 4 } else { 0 };
+            let payload_len = len.saturating_sub(4);
 
             if msg_type == b'Z' && payload_len == 1 {
                 // ReadyForQuery — need 1 byte of payload for transaction status
@@ -509,7 +515,7 @@ mod tests {
         let mut data = Vec::new();
         data.push(b'T');
         data.extend_from_slice(&104i32.to_be_bytes());
-        data.extend_from_slice(&vec![0u8; 100]);
+        data.extend_from_slice(&[0u8; 100]);
         data.extend_from_slice(&[0x5A, 0x00, 0x00, 0x00, 0x05, b'I']);
         assert!(scanner.scan(&data));
         assert_eq!(scanner.transaction_status, b'I');
@@ -521,12 +527,12 @@ mod tests {
         let mut part1 = Vec::new();
         part1.push(b'D');
         part1.extend_from_slice(&24i32.to_be_bytes());
-        part1.extend_from_slice(&vec![0xAA; 10]);
+        part1.extend_from_slice(&[0xAA; 10]);
         assert!(!scanner.scan(&part1));
         assert_eq!(scanner.remaining_skip, 10);
 
         let mut part2 = Vec::new();
-        part2.extend_from_slice(&vec![0xBB; 10]);
+        part2.extend_from_slice(&[0xBB; 10]);
         part2.extend_from_slice(&[0x5A, 0x00, 0x00, 0x00, 0x05, b'I']);
         assert!(scanner.scan(&part2));
         assert_eq!(scanner.transaction_status, b'I');
