@@ -284,6 +284,92 @@ pub const SSL_REQUEST_CODE: i32 = 80877103;
 /// Cancel request magic number.
 pub const CANCEL_REQUEST_CODE: i32 = 80877102;
 
+/// Lightweight message-boundary scanner for the fast proxy path.
+/// Tracks position within the PG wire protocol stream without full message parsing.
+/// Only inspects ReadyForQuery messages for transaction state.
+pub struct MessageBoundaryScanner {
+    /// Bytes remaining to skip in the current message payload.
+    pub(crate) remaining_skip: usize,
+    /// Partial header bytes carried from previous read.
+    header_buf: [u8; 5],
+    /// How many header bytes we have buffered.
+    header_len: usize,
+    /// Last observed transaction status from ReadyForQuery (b'I', b'T', b'E').
+    pub transaction_status: u8,
+}
+
+impl MessageBoundaryScanner {
+    pub fn new() -> Self {
+        Self {
+            remaining_skip: 0,
+            header_buf: [0u8; 5],
+            header_len: 0,
+            transaction_status: b'I',
+        }
+    }
+
+    /// Scan a buffer of bytes from the server->client direction.
+    /// Updates transaction_status when ReadyForQuery messages are found.
+    /// Returns true if the most recent ReadyForQuery had status 'I' (idle).
+    pub fn scan(&mut self, data: &[u8]) -> bool {
+        let mut pos = 0;
+        let mut saw_idle = false;
+
+        while pos < data.len() {
+            // Phase 1: skip remaining payload bytes from previous message
+            if self.remaining_skip > 0 {
+                let skip = std::cmp::min(self.remaining_skip, data.len() - pos);
+                pos += skip;
+                self.remaining_skip -= skip;
+                continue;
+            }
+
+            // Phase 2: accumulate header bytes (type + 4-byte length = 5 bytes)
+            if self.header_len < 5 {
+                let need = 5 - self.header_len;
+                let avail = std::cmp::min(need, data.len() - pos);
+                self.header_buf[self.header_len..self.header_len + avail]
+                    .copy_from_slice(&data[pos..pos + avail]);
+                self.header_len += avail;
+                pos += avail;
+
+                if self.header_len < 5 {
+                    break; // need more data
+                }
+            }
+
+            // Phase 3: we have a full 5-byte header
+            let msg_type = self.header_buf[0];
+            let len = i32::from_be_bytes([
+                self.header_buf[1],
+                self.header_buf[2],
+                self.header_buf[3],
+                self.header_buf[4],
+            ]) as usize;
+
+            let payload_len = if len >= 4 { len - 4 } else { 0 };
+
+            if msg_type == b'Z' && payload_len == 1 {
+                // ReadyForQuery — need 1 byte of payload for transaction status
+                if pos < data.len() {
+                    self.transaction_status = data[pos];
+                    pos += 1;
+                    self.remaining_skip = 0;
+                    saw_idle = self.transaction_status == b'I';
+                } else {
+                    self.remaining_skip = 1;
+                }
+            } else {
+                self.remaining_skip = payload_len;
+            }
+
+            self.header_len = 0; // reset for next message
+        }
+
+        saw_idle
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,5 +416,76 @@ mod tests {
         assert_eq!(msg.msg_type, b'Q');
         let q = extract_query_text(&msg).unwrap();
         assert_eq!(q, "SELECT 1");
+    }
+
+    #[test]
+    fn test_scanner_single_ready_for_query() {
+        let mut scanner = MessageBoundaryScanner::new();
+        let data = [0x5A, 0x00, 0x00, 0x00, 0x05, b'I'];
+        assert!(scanner.scan(&data));
+        assert_eq!(scanner.transaction_status, b'I');
+    }
+
+    #[test]
+    fn test_scanner_transaction_state_tracking() {
+        let mut scanner = MessageBoundaryScanner::new();
+        let data = [0x5A, 0x00, 0x00, 0x00, 0x05, b'T'];
+        assert!(!scanner.scan(&data));
+        assert_eq!(scanner.transaction_status, b'T');
+
+        let data = [0x5A, 0x00, 0x00, 0x00, 0x05, b'I'];
+        assert!(scanner.scan(&data));
+        assert_eq!(scanner.transaction_status, b'I');
+    }
+
+    #[test]
+    fn test_scanner_skips_non_z_messages() {
+        let mut scanner = MessageBoundaryScanner::new();
+        let mut data = Vec::new();
+        data.push(b'D');
+        data.extend_from_slice(&8i32.to_be_bytes());
+        data.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+        data.extend_from_slice(&[0x5A, 0x00, 0x00, 0x00, 0x05, b'I']);
+        assert!(scanner.scan(&data));
+        assert_eq!(scanner.transaction_status, b'I');
+    }
+
+    #[test]
+    fn test_scanner_split_across_reads() {
+        let mut scanner = MessageBoundaryScanner::new();
+        let part1 = [0x5A, 0x00, 0x00];
+        let part2 = [0x00, 0x05, b'I'];
+        assert!(!scanner.scan(&part1));
+        assert!(scanner.scan(&part2));
+        assert_eq!(scanner.transaction_status, b'I');
+    }
+
+    #[test]
+    fn test_scanner_large_message_then_rfq() {
+        let mut scanner = MessageBoundaryScanner::new();
+        let mut data = Vec::new();
+        data.push(b'T');
+        data.extend_from_slice(&104i32.to_be_bytes());
+        data.extend_from_slice(&vec![0u8; 100]);
+        data.extend_from_slice(&[0x5A, 0x00, 0x00, 0x00, 0x05, b'I']);
+        assert!(scanner.scan(&data));
+        assert_eq!(scanner.transaction_status, b'I');
+    }
+
+    #[test]
+    fn test_scanner_payload_split_across_reads() {
+        let mut scanner = MessageBoundaryScanner::new();
+        let mut part1 = Vec::new();
+        part1.push(b'D');
+        part1.extend_from_slice(&24i32.to_be_bytes());
+        part1.extend_from_slice(&vec![0xAA; 10]);
+        assert!(!scanner.scan(&part1));
+        assert_eq!(scanner.remaining_skip, 10);
+
+        let mut part2 = Vec::new();
+        part2.extend_from_slice(&vec![0xBB; 10]);
+        part2.extend_from_slice(&[0x5A, 0x00, 0x00, 0x00, 0x05, b'I']);
+        assert!(scanner.scan(&part2));
+        assert_eq!(scanner.transaction_status, b'I');
     }
 }
