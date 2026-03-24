@@ -154,22 +154,25 @@ parsing, and connection pooling.
 
 ### Results
 
-| Metric | Direct Postgres | Through PgMux | Overhead |
-|---|---|---|---|
-| Throughput | 3,743 qps | 1,891 qps | -49.5% |
-| Latency avg | 1.33 ms | 2.64 ms | +1.31 ms |
-| Latency p50 | 0.97 ms | 1.99 ms | +1.02 ms |
-| Latency p95 | 3.65 ms | 6.58 ms | +2.93 ms |
-| Latency p99 | 5.62 ms | 9.24 ms | +3.62 ms |
-| Errors | 0 | 0 | — |
+| Metric | Direct Postgres | PgMux (fast path) | PgMux (throttled) | Fast path overhead |
+|---|---|---|---|---|
+| Throughput | 3,743 qps | 1,891 qps | 1,319 qps | -49.5% |
+| Latency avg | 1.33 ms | 2.64 ms | 3.78 ms | +1.31 ms |
+| Latency p50 | 0.97 ms | 1.99 ms | 2.23 ms | +1.02 ms |
+| Latency p95 | 3.65 ms | 6.58 ms | 11.49 ms | +2.93 ms |
+| Latency p99 | 5.62 ms | 9.24 ms | 19.03 ms | +3.62 ms |
+| Errors | 0 | 0 | 0 | — |
 
-PgMux uses a **two-tier proxy architecture**. For tenants under their
-size limit (the common case), raw bytes are forwarded without message
-parsing — only a lightweight boundary scanner tracks transaction state.
-Full message parsing activates only when a tenant exceeds their database
-size limit and write restrictions are needed.
+**Fast path** (normal operation): raw byte forwarding with no message
+parsing. A lightweight boundary scanner tracks transaction state for
+pool management. This is what >99% of traffic uses.
 
-This adds approximately **1 ms of latency at p50** in this all-local
+**Throttled** (tenant over size limit): full message parsing with
+read-only enforcement. PgMux automatically switches to this mode
+per-session when the database exceeds its configured size limit, and
+switches back when the tenant is under limit again.
+
+The fast path adds approximately **1 ms at p50** in this all-local
 Docker-to-Docker configuration. For production workloads where queries
 typically take 10-100+ ms, the overhead is negligible.
 
