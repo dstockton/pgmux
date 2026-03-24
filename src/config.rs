@@ -185,7 +185,9 @@ impl Config {
             cfg.tls.key_path = v;
         }
         if let Ok(v) = std::env::var("PG_MUX_UPSTREAM_TLS") {
-            cfg.tls.upstream_tls = v.parse().unwrap_or(v == "1" || v.eq_ignore_ascii_case("true"));
+            cfg.tls.upstream_tls = v
+                .parse()
+                .unwrap_or(v == "1" || v.eq_ignore_ascii_case("true"));
         }
 
         Ok(cfg)

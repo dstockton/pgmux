@@ -79,11 +79,14 @@ impl DbSizeMonitor {
                 }
             }
         }
-        self.sessions.insert(id, SessionLimit {
-            database: database.to_string(),
-            limit_bytes,
-            over_limit: flag.clone(),
-        });
+        self.sessions.insert(
+            id,
+            SessionLimit {
+                database: database.to_string(),
+                limit_bytes,
+                over_limit: flag.clone(),
+            },
+        );
         (id, flag)
     }
 
@@ -199,10 +202,7 @@ impl DbSizeMonitor {
                                     .get_or_create(&labels)
                                     .set(limit as f64);
                                 if size > limit {
-                                    self.metrics
-                                        .db_over_limit
-                                        .get_or_create(&labels)
-                                        .set(1.0);
+                                    self.metrics.db_over_limit.get_or_create(&labels).set(1.0);
                                     warn!(
                                         db = db.as_str(),
                                         size = size,
@@ -210,10 +210,7 @@ impl DbSizeMonitor {
                                         "Database over size limit — enforcing read-only"
                                     );
                                 } else {
-                                    self.metrics
-                                        .db_over_limit
-                                        .get_or_create(&labels)
-                                        .set(0.0);
+                                    self.metrics.db_over_limit.get_or_create(&labels).set(0.0);
                                 }
                             }
 
